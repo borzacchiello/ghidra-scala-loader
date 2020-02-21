@@ -117,7 +117,7 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 		val classpath = System.getProperty("java.class.path")
 		val separator = System.getProperty("path.separator")
 		dirs.foldLeft(classpath)((path, dir) =>
-			s"${path}${separator}${dir.getAbsolutePath}")
+			s"$path$separator${dir.getAbsolutePath}")
 	}
 
 	private def getSourcePath: String =
@@ -127,9 +127,9 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 		getPath(GhidraScriptUtil.getScriptBinDirectories.asScala)
 
 	override def createNewScript(newScript: ResourceFile, category: String): Unit = {
-		val scriptName = newScript.getName()
+		val scriptName = newScript.getName
 		val dotpos = scriptName.lastIndexOf('.')
-		val classname =
+		val classname: String =
 			if (dotpos >= 0)
 				scriptName.substring(0, dotpos)
 			else
@@ -141,7 +141,7 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 			.filter(!_.getName.startsWith("ghidra.program.model."))
 			.foreach(pkg => writer.println(s"import ${pkg.getName}.*;"))
 		writer.println("")
-		writer.println(s"public class ${classname} extends GhidraScript {")
+		writer.println(s"public class $classname extends GhidraScript {")
 		writer.println("")
 		writer.println("    public void run() throws Exception {")
 		writeBody(writer)
