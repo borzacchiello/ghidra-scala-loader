@@ -1,3 +1,5 @@
 /dist/
 /lib/
 /gradle.properties
+/build/
+/.gradle/
