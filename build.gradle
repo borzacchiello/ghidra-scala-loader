@@ -36,6 +36,12 @@ tasks.withType(Zip) {
 	dependsOn getDeps
 }
 
+task customCleanUp(type: Delete) {
+    delete "dist", "lib"
+}
+
+tasks.clean.dependsOn(tasks.customCleanUp)
+
 //----------------------START "DO NOT MODIFY" SECTION------------------------------
 def ghidraInstallDir
 
