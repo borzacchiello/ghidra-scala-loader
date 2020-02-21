@@ -15,21 +15,11 @@
  */
 package ghidra.app.script
 
-import generic.io.NullPrintWriter
+import java.io.{File, PrintWriter}
+
 import generic.jar.ResourceFile
-import ghidra.app.util.headless.HeadlessScript
-import ghidra.util.Msg
 
-import scala.tools.nsc.MainClass
-import javax.tools.JavaFileObject.Kind
-import java.io.File
-import java.io.FileWriter
-import java.io.PrintWriter
-import java.util.ArrayList
-import java.util.Collections
-import java.util.List
-
-import scala.reflect.internal.util.ScriptSourceFile
+import scala.jdk.CollectionConverters._
 
 class ScalaScriptProvider extends GhidraScriptProvider {
 	override def getDescription: String = "Scala"
@@ -62,9 +52,18 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 
 	private def getSourceFile(c: Class[_]): ResourceFile = ???
 
-	private def getSourcePath(): String = ???
+	private def getPath(dirs: Iterable[ResourceFile]): String = {
+		val classpath = System.getProperty("java.class.path")
+		val separator = System.getProperty("path.separator")
+		dirs.foldLeft(classpath)((path, dir) =>
+			s"${path}${separator}${dir.getAbsolutePath}")
+	}
 
-	private def getClassPath(): String = ???
+	private def getSourcePath: String =
+		getPath(GhidraScriptUtil.getScriptSourceDirectories.asScala)
+
+	private def getClassPath: String =
+		getPath(GhidraScriptUtil.getScriptBinDirectories.asScala)
 
 	override def createNewScript(resourceFile: ResourceFile, s: String): Unit = ???
 
