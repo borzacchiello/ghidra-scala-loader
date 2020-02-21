@@ -14,6 +14,28 @@
 // application.gradle.version property in <GHIDRA_INSTALL_DIR>/Ghidra/application.properties
 // for the correction version of Gradle to use for the Ghidra installation you specify.
 
+plugins {
+	id 'scala'
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation group: 'org.scala-lang', name: 'scala-library', version: '2.13.1'
+	implementation group: 'org.scala-lang', name: 'scala-compiler', version: '2.13.1'
+}
+
+task getDeps(type: Copy) {
+	from sourceSets.main.runtimeClasspath
+	into 'lib/'
+}
+
+tasks.withType(Zip) {
+	dependsOn getDeps
+}
+
 //----------------------START "DO NOT MODIFY" SECTION------------------------------
 def ghidraInstallDir
 
