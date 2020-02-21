@@ -19,9 +19,12 @@ import java.io.{File, FileWriter, PrintWriter}
 
 import generic.io.NullPrintWriter
 import generic.jar.ResourceFile
+import ghidra.app.util.headless.HeadlessScript
 import ghidra.util.Msg
+import javax.tools.JavaFileObject.Kind
 
 import scala.jdk.CollectionConverters._
+import scala.tools.nsc.MainClass
 
 class ScalaScriptProvider extends GhidraScriptProvider {
 	val loader = new JavaScriptClassLoader
@@ -35,7 +38,7 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 		super.deleteScript(scriptSource)
 	}
 
-	override def getScriptInstance(sourceFile: ResourceFile, printWriter: PrintWriter): Option[GhidraScript] = {
+	override def getScriptInstance(sourceFile: ResourceFile, printWriter: PrintWriter): GhidraScript = {
 		val writer = Option(printWriter) match {
 			case None => new NullPrintWriter
 			case Some(w) => w
@@ -47,15 +50,15 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 			forceClassReload()
 		val clazzName = GhidraScriptUtil.getBaseName(sourceFile)
 		try {
-			Class.forName(clazzName, true, loader).newInstance() match {
+			Class.forName(clazzName, true, loader).getConstructor().newInstance() match {
  				case source: GhidraScript =>
 					source.setSourceFile(sourceFile)
-					Some(source)
+					source
 				case _ =>
 					val message = s"Not a valid Ghidra script: ${sourceFile.getName}"
 					writer.println(message)
 					Msg.error(this, message)
-					None
+					null
 			}
 		} catch {
 			case e: GhidraScriptUnsupportedClassVersionError =>
@@ -63,7 +66,6 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 				getScriptInstance(sourceFile, writer)
 		}
 	}
-
 
 	private def forceClassReload(): Unit = new JavaScriptClassLoader
 
@@ -83,29 +85,92 @@ class ScalaScriptProvider extends GhidraScriptProvider {
 			case Some(modifiedTime) => classFile.lastModified() > modifiedTime
 		}
 
-	protected def areAllParentClassesUpToDate(sourceFile: ResourceFile): Boolean = ???
+	protected def areAllParentClassesUpToDate(sourceFile: ResourceFile): Boolean = getParentClasses(sourceFile) match {
+		case None => false
+		case Some(parents) if parents.isEmpty => true
+		case Some(parents) =>
+			// Check each parent for modification
+			parents.foldLeft(true)((upToDate, c) => getSourceFile(c) match {
+				case None => upToDate
+				case Some(parentSource) =>
+					val parentClass = getClassFile(parentSource, c.getName)
+					if (parentSource.lastModified() > parentClass.lastModified())
+						false
+					else
+						upToDate
+			})
+	}
 
-	protected def compile(sourceFile: ResourceFile, writer: PrintWriter): Boolean = ???
+	protected def compile(sourceFile: ResourceFile, writer: PrintWriter): Unit = {
+		val info = GhidraScriptUtil.getScriptInfo(sourceFile)
+		info.setCompileErrors(true)
+		if (!doCompile(sourceFile, writer)) {
+			writer.flush()
+			throw new ClassNotFoundException(s"Unable to compile class aw: ${sourceFile.getName}")
+		}
+		compileParentClasses(sourceFile, writer)
+		forceClassReload()
+		info.setCompileErrors(false)
+		writer.println(s"Successfully compiled: ${sourceFile.getName}")
+	}
 
-	private def doCompile(sourceFile: ResourceFile, writer: PrintWriter): Unit = ???
+	private def doCompile(sourceFile: ResourceFile, writer: PrintWriter): Boolean = {
+		new ResourceFileJavaFileObject(sourceFile.getParentFile, sourceFile, Kind.SOURCE)
+		val outDir = GhidraScriptUtil.getScriptCompileOutputDirectory(sourceFile).getAbsolutePath
+		Msg.trace(this, s"Compiling script $sourceFile to dir $outDir")
+		val d = new MainClass
+		val args = Array(
+			"-g:source",
+			"-d", outDir,
+			"-sourcepath", getSourcePath,
+			"-classpath", getClassPath,
+			sourceFile.getAbsolutePath
+		)
+		d.process(args)
+	}
 
-	private def getParentClasses(scriptSourceFile: ResourceFile): Option[List[Class[_]]] = ???
+	private def getParentClasses(source: ResourceFile): Option[List[Class[_]]] = getScriptClass(source) match {
+		case None => None
+		case Some(scriptClass) =>
+			def getSuperClasses(c: Class[_]): List[Class[_]] = {
+				if (c == null) Nil else c :: getSuperClasses(c.getSuperclass)
+			}
+			Some(getSuperClasses(scriptClass)
+				.filter(c => !(c.equals(classOf[GhidraScript]) || c.equals(classOf[HeadlessScript]))))
+	}
 
-	private def getScriptClass(scriptSourceFile: ResourceFile): Option[Class[_]] = ???
+	private def getScriptClass(scriptSourceFile: ResourceFile): Option[Class[_]] = {
+		val clazzName = GhidraScriptUtil.getBaseName(scriptSourceFile)
+		try {
+			Some(Class.forName(clazzName, true, new JavaScriptClassLoader))
+		} catch {
+			case e @ (_: NoClassDefFoundError | _: ClassNotFoundException) =>
+				val message =  s"Unable to find class file for script file: $scriptSourceFile"
+				Msg.error(this, message, e)
+				None
+			case e: GhidraScriptUnsupportedClassVersionError => e.getClassFile.delete; None
+		}
+	}
 
 	private def compileParentClasses(sourceFile: ResourceFile, writer: PrintWriter): Unit = {
 		(getParentClasses(sourceFile), getScriptClass(sourceFile)) match {
 			case (None, _) | (_, None) => ()
 			case (Some(parents), _) if parents.isEmpty => ()
-			case (Some(parents), Some(scriptClass)) =>
-				(scriptClass :: parents).reverse
+			case (Some(parents), Some(script)) =>
+				def compile(c: Class[_]): Unit = getSourceFile(c) match {
+					case None => ()
+					case Some(f) if doCompile(f, writer) => ()
+					case _ => Msg.error(this, s"Failed to recompile class $c")
+				}
+				// Recompile in reverse order
+				(script :: parents).reverse.foreach(compile)
 		}
 	}
 
 	private def getSourceFile(c: Class[_]): Option[ResourceFile] = {
 		val filename = c.getName.replace('.', '/') + ".scala"
 		val scriptDirs = GhidraScriptUtil.getScriptSourceDirectories.asScala
-		scriptDirs.foldLeft(None[ResourceFile])((found, dir) => found match {
+		scriptDirs.foldLeft(None: Option[ResourceFile])((found, dir) => found match {
 			case Some(_) => found
 			case None =>
 				val f = new ResourceFile(dir, filename)
